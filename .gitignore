@@ -1,0 +1,27 @@
+bin/
+output
+**/*.coverprofile
+**/coverage.out
+**/coverage.txt
+**/*.log
+
+*.iml
+.idea/
+**/*junit.xml
+**/*.exe
+**/*.tgz
+**/apache-servicecomb-service-center-*
+
+vendor/**
+!vendor/manifest
+
+# for local UT
+**/conf/
+data
+tmp/
+
+docs/_build
+docs/_static
+docs/_templates
+
+.DS_Store
