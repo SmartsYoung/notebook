@@ -16,7 +16,7 @@ func GetResource(api string) string {
 
 ## 2 角色与权限
 
-- **角色（Role）**与权限（Permission）相关联，一个角色对应多个权限
+- **角色（Role)** 与权限（Permission）相关联，一个角色对应多个权限
 
 - **用户（User）**与角色（Role）相关联，一个用户对应多个角色
 
@@ -138,64 +138,115 @@ func Allow(ctx context.Context, roleList []string, project, resource, verbs stri
 
 ### 4.1创建角色
 
-本文的重点是分析如和通过角色分配资源并进行相应的操作，认证以及账户管理请参考[链接](https://service-center.readthedocs.io/en/latest/user-guides/rbac.html)。
+本文的重点是分析如和通过角色分配资源并进行相应的操作，认证以及账户管理请参考[链接](https://service-center.readthedocs.io/en/latest/user-guides/rbac.html)。  
+为了更好的理解流程，下面我们将通过客户端示例代码，实现基于Service-Center的API资源角色权限管理。  
 
-创建一个新角色“tester”，并为它分配资源service、instance和rule，并为资源组分配 。
+调用Client的RegisterRole方法注册角色。下面仅展示部分RBAC客户端代码，完整客户端代码请参考：[https://github.com/hityc2019/sc-client]()
 
-```shell
-curl -X POST \
-  http://127.0.0.1:30100/v4/role \
-  -H 'Accept: */*' \
-  -H 'Authorization: Bearer {your_token}' \
-  -H 'Content-Type: application/json' \
-  -d '{
-	  "name": "tester",
-      "perms": [
-              { 
-                  "resources": ["service","instance"],
-                  "verbs":     ["get", "create", "update"]
-              },
-              { 
-                  "resources": ["rule"],
-                  "verbs":     ["get"]
-              }
-        ]
-}'
+```go
+// RegisterRole register the role from the service-center
+func (c *Client) RegisterRole(role *rbacframe.Role, token string) error {
+    if role == nil {
+        return errors.New("invalid request role parameter")
+    }
+    body, err := json.Marshal(role)
+    if err != nil {
+        return NewJSONException(err, string(body))
+    }
+
+    registerURL := c.formatURL(RolePath, nil, nil)
+    resp, err := c.httpDo(http.MethodPost, registerURL, c.addTokenToHeader(token), body)
+    if err != nil {
+        return err
+    }
+
+    if resp.StatusCode != http.StatusOK {
+        body, err := ioutil.ReadAll(resp.Body)
+        if err != nil {
+            return NewIOException(err)
+        }
+        return NewCommonException("result: %d %s", resp.StatusCode, string(body))
+    }
+    return nil
+}
 ```
+通过Role结构体传入角色的资源以及相应的权限。
 
 ### 4.2 用户关联角色
 
-创建一个用户peter，并给用户关联刚创建的角色“tester”，若创建用户时并未关联角色，则该用户没有任何权限。
+创建一个用户peter，并给用户关联刚创建的角色“tester”，即通过Account结构体关联用户和角色等信息。若创建用户时并未关联角色，则该用户没有任何权限。
 
-```shell
-curl -X POST \
-  http://127.0.0.1:30100/v4/account \
-  -H 'Accept: */*' \
-  -H 'Authorization: Bearer {your_token}' \
-  -H 'Content-Type: application/json' \
-  -d '{
-   "name":"peter",
-   "password":"{strong_password}",
-   "roles": ["tester", "tester2"]
-}'
+```go
+// RegisterAccount register the account from the service-center
+func (c *Client) RegisterAccount(account *rbacframe.Account, token string) error {
+    if account == nil {
+        return errors.New("invalid request account parameter")
+    }
+    body, err := json.Marshal(account)
+    if err != nil {
+        return NewJSONException(err, "parse the account info failed")
+    }
+    registerURL := c.formatURL(AccountPath, nil, nil)
+    resp, err := c.httpDo(http.MethodPost, registerURL, c.addTokenToHeader(token), body)
+    if err != nil {
+        return err
+    }
+    if resp == nil {
+        return fmt.Errorf("RegisterAccount failed, response is empty, AccountName: %s", account.Name)
+    }
+	if resp.StatusCode != http.StatusOK {
+		body, err := ioutil.ReadAll(resp.Body)
+		if err != nil {
+			return NewIOException(err)
+		}
+		return NewCommonException("result: %d %s", resp.StatusCode, string(body))
+	}
+	return nil
+}
 ```
-
-“tester2”是一个空角色，没有任何权限，可以在其需要时再为"tester2"分配权限。
 
 ### 4.3 生成token并访问资源
 
-为用户生成token，此token会在半小时后失效。
+为刚创建的用户生成token，若成功则返回token。
 
-```shell script
-curl -X POST \
-  http://127.0.0.1:30100/v4/token \
-  -d '{
-   "name":"peter",
-   "password":"{strong_password}"
-  }'
+```go
+// GetToken generate token according to user-password
+func (c *Client) GetToken(username, password string) (string, error) {
+    request := rbacframe.Account{
+        Name:     username,
+        Password: password,
+    }
+    body, err := json.Marshal(request)
+    if err != nil {
+        return "", NewJSONException(err,"parse the username or password failed")
+    }
+
+    tokenUrl := c.formatURL(TokenPath, nil, nil)
+    resp, err := c.httpDo(http.MethodPost, tokenUrl, nil, body)
+    if err != nil {
+        return "", err
+    }
+    if resp == nil {
+        return "", fmt.Errorf("user %s generate token failder: ", username)
+    }
+    body, err = ioutil.ReadAll(resp.Body)
+    if err != nil {
+        return "", NewIOException(err)
+    }
+
+    if resp.StatusCode == http.StatusOK {
+        var response rbacframe.Token
+        err = json.Unmarshal(body, &response)
+        if err != nil {
+            return "", NewJSONException(err, string(body))
+        }
+        return response.TokenStr, nil
+    }
+    return "", fmt.Errorf("user %s generate token failed, response StatusCode: %d", username, resp.StatusCode)
+}
 ```
 
-用户携带此token访问服务，例如：访问注册微服务的API并注册微服务，会返回200显示注册成功。
+用户携带此token访问服务，例如：该用户所拥有的角色拥有访注册微服务API的权限，，会返回200显示注册成功。
 ```shell script
 curl -X POST \
   http://127.0.0.1:30100/v4/default/registry/microservices \
@@ -210,7 +261,7 @@ curl -X POST \
         }
 }'
 ```
-而携带此token删除刚创建的微服务返回401未授权。
+但此API未授权删除微服务API的权限，携带此token删除刚创建的微服务返回401未授权。
 
 ```shell script
 curl -X DElETE \
